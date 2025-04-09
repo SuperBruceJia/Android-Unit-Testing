@@ -1,0 +1,95 @@
+#!/bin/bash
+
+echo "Starting autograder..."
+
+# Ensure the student submission is mounted
+if [ ! -d "submission" ]; then
+    echo "ERROR: No submission found!"
+    exit 1
+fi
+
+mkdir -p build
+
+mkdir submission/tests
+cp source/tests/*test*.cpp submission/tests/
+cp source/headers/*.h submission
+cp source/generate_results.py .
+
+# Navigate to the submission directory
+cd submission
+
+# # rename student's files to a single consistent naming scheme so that we can compile correctly
+mv *hw3*1*.cpp hw3_problem1.cpp
+mv *hw3*2*.cpp hw3_problem2.cpp
+mv *hw3*3*.cpp hw3_problem3.cpp
+mv *hw3*5*.cpp hw3_problem5.cpp
+echo "Renamed student files:"
+
+# Initialize the results JSON file
+RESULTS_FILE="../results/results.json"
+
+# Create or reset the results.json file with an opening array bracket
+echo '{ "score": 0, "visibility": "visible", "stdout_visibility": "visible", "stdout_visibility": "visible", "tests": [' > "$RESULTS_FILE"
+
+compile_and_run_tests() {
+    local problem_number=$1
+
+    echo "Compiling the submission and tests... for problem ${problem_number}"
+
+    # Define paths
+    local compile_log="../build/compile_errors_${problem_number}.txt"
+    local test_executable="run_tests_${problem_number}"
+    local test_sources="tests/test_main.cpp tests/hw3_problem${problem_number}_test.cpp hw3_problem${problem_number}.cpp"
+    local report_file="json:report${problem_number}.json"
+    local error_report_file="report${problem_number}.json"
+    local execution_log="../build/execution_errors_${problem_number}.txt"
+
+    # Compile the student's submission along with the test suite
+    g++ -std=c++17 -o "${test_executable}" \
+        ${test_sources} \
+        -I/usr/local/include -L/usr/local/lib -lgtest -lgtest_main -pthread > "${compile_log}" 2>&1
+
+    if [ $? -ne 0 ]; then
+        echo "Compilation of problem ${problem_number} failed. Writing error feedback to results.json."
+
+        COMPILE_ERRORS=$(tail -n 50 "${compile_log}" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g' -e 's/"/\\"/g' -e 's/\\/\\\\/g')
+        echo $COMPILE_ERRORS
+
+        # Append JSON output
+        echo '        {
+            "error": "Compilation Problem '${problem_number}'",
+            "output": "Compilation of problem '${problem_number}' failed with the following errors:\\n'"${COMPILE_ERRORS}"'"
+        }' > "$error_report_file"
+    else
+        # Run the tests
+        echo "Running the tests for problem ${problem_number}..."
+        ./"${test_executable}" --gtest_output="${report_file}" > "${execution_log}" 2>&1
+        EXIT_CODE=$?
+
+        if [ $EXIT_CODE -eq 139 ]; then
+            echo "Segmentation fault detected!" >> "${execution_log}"
+            echo "Test execution of problem ${problem_number} failed. Writing error feedback to results.json."
+
+            EXEC_ERRORS=$(tail -n 50 "${execution_log}" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g' -e 's/"/\\"/g' -e 's/\\/\\\\/g')
+            echo $EXEC_ERRORS
+
+            # Append JSON output
+            echo '        {
+                "error": "Test Execution Crash For Problem '${problem_number}'",
+                "output": "Test Execution of problem '${problem_number}' crashed with the following errors:\\n'"${EXEC_ERRORS}"'"
+            }' > "$error_report_file"
+        fi
+      fi
+}
+
+# Call the function for problems 1 to 5
+compile_and_run_tests 1
+compile_and_run_tests 2
+compile_and_run_tests 3
+compile_and_run_tests 5
+
+# Generate Gradescope results.json
+cd ../
+echo "Generating Gradescope results..."
+python3 generate_results.py
+echo "Gradescope results have been generated!"
